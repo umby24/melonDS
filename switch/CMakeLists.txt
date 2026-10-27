@@ -20,7 +20,7 @@ include(${BOREALIS_LIBRARY}/cmake/toolchain.cmake)  # pulls in devkitPro's Switc
 
 project(melonds-next C CXX ASM)
 set(APP_TITLE "melonds-next")
-set(APP_AUTHOR "melonds-next contributors")
+set(APP_AUTHOR "umby24")
 set(APP_VERSION "0.1.0")
 
 # borealis' toolchain.cmake overwrites CMAKE_C_FLAGS, which drops devkitPro's arch flags.
