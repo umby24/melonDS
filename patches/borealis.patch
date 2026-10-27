@@ -1,0 +1,149 @@
+diff --git a/library/include/borealis/core/application.hpp b/library/include/borealis/core/application.hpp
+index 857aee54..4cccc9e5 100644
+--- a/library/include/borealis/core/application.hpp
++++ b/library/include/borealis/core/application.hpp
+@@ -107,6 +107,13 @@ class Application
+      */
+     static void setWindowSize(int width, int height);
+ 
++#ifdef __SWITCH__
++    // melonds-next patch: draw the whole UI rotated by quarter turns clockwise (0-3),
++    // for holding the console sideways. Content size, touch and directional input follow.
++    static void setRotation(int quarterTurns);
++    static int getRotation();
++#endif
++
+     /**
+      * Called by the video context when the content window is Repositioned
+      */
+@@ -209,6 +216,9 @@ class Application
+     static std::string* getCommonFooter();
+ 
+     inline static float windowScale;
++#ifdef __SWITCH__
++    inline static int rotation = 0; // melonds-next patch, see setRotation()
++#endif
+     inline static float maximumUIScale = 0.0f;
+ 
+     /**
+diff --git a/library/lib/core/application.cpp b/library/lib/core/application.cpp
+index 5b2c9ef9..fbeea2c1 100644
+--- a/library/lib/core/application.cpp
++++ b/library/lib/core/application.cpp
+@@ -293,6 +293,45 @@ void Application::processInput()
+     inputManager->updateMouseStates(&rawMouse);
+     inputManager->updateUnifiedControllerState(&controllerState);
+ 
++#ifdef __SWITCH__
++    // melonds-next patch: with the UI rotated, map physical touch points and directions
++    // into the rotated content space.
++    if (Application::rotation)
++    {
++        const float pw = (float)Application::windowWidth, ph = (float)Application::windowHeight;
++        const float s = Application::windowScale;
++        for (auto& t : rawTouch)
++        {
++            float px = t.position.x * s, py = t.position.y * s, lx = px, ly = py;
++            if (Application::rotation == 1)      { lx = py;      ly = pw - px; }
++            else if (Application::rotation == 2) { lx = pw - px; ly = ph - py; }
++            else if (Application::rotation == 3) { lx = ph - py; ly = px; }
++            t.position.x = lx / s;
++            t.position.y = ly / s;
++        }
++
++        // Physical direction that now points "up" on screen, per rotation.
++        auto rotate4 = [](bool* b, ControllerButton up, ControllerButton right, ControllerButton down, ControllerButton left)
++        {
++            bool u = b[up], r = b[right], d = b[down], l = b[left];
++            if (Application::rotation == 1)      { b[up] = r; b[right] = d; b[down] = l; b[left] = u; }
++            else if (Application::rotation == 2) { b[up] = d; b[right] = l; b[down] = u; b[left] = r; }
++            else                                 { b[up] = l; b[right] = u; b[down] = r; b[left] = d; }
++        };
++        rotate4(controllerState.buttons, BUTTON_UP, BUTTON_RIGHT, BUTTON_DOWN, BUTTON_LEFT);
++        rotate4(controllerState.buttons, BUTTON_NAV_UP, BUTTON_NAV_RIGHT, BUTTON_NAV_DOWN, BUTTON_NAV_LEFT);
++        auto rotateAxes = [](float* a, ControllerAxis ax, ControllerAxis ay)
++        {
++            float x = a[ax], y = a[ay];
++            if (Application::rotation == 1)      { a[ax] = y;  a[ay] = -x; }
++            else if (Application::rotation == 2) { a[ax] = -x; a[ay] = -y; }
++            else                                 { a[ax] = -y; a[ay] = x; }
++        };
++        rotateAxes(controllerState.axes, LEFT_X, LEFT_Y);
++        rotateAxes(controllerState.axes, RIGHT_X, RIGHT_Y);
++    }
++#endif
++
+     if (isSwapInputKeys())
+     {
+         bool swapKeys[ControllerButton::_BUTTON_MAX];
+@@ -792,6 +831,24 @@ void Application::frame()
+     float scaleFactor = videoContext->getScaleFactor();
+ 
+     nvgBeginFrame(frameContext.vg, Application::windowWidth, Application::windowHeight, scaleFactor);
++#ifdef __SWITCH__
++    // melonds-next patch: see setRotation()
++    if (Application::rotation == 1)
++    {
++        nvgTranslate(frameContext.vg, Application::windowWidth, 0);
++        nvgRotate(frameContext.vg, NVG_PI / 2);
++    }
++    else if (Application::rotation == 2)
++    {
++        nvgTranslate(frameContext.vg, Application::windowWidth, Application::windowHeight);
++        nvgRotate(frameContext.vg, NVG_PI);
++    }
++    else if (Application::rotation == 3)
++    {
++        nvgTranslate(frameContext.vg, 0, Application::windowHeight);
++        nvgRotate(frameContext.vg, -NVG_PI / 2);
++    }
++#endif
+     nvgScale(frameContext.vg, Application::windowScale, Application::windowScale);
+ 
+     std::vector<View*> viewsToDraw;
+@@ -1211,6 +1268,22 @@ void Application::setWindowSize(int width, int height)
+     Application::windowWidth  = width;
+     Application::windowHeight = height;
+ 
++#ifdef __SWITCH__
++    // melonds-next patch: lay out for the rotated (possibly portrait) window; a portrait
++    // layout is ORIGINAL_WINDOW_HEIGHT wide so text stays the same size.
++    if (Application::rotation % 2)
++    {
++        float scale = (float)height / (float)ORIGINAL_WINDOW_HEIGHT;
++        Application::windowScale   = scale;
++        Application::contentWidth  = std::ceil((float)height / scale);
++        Application::contentHeight = std::ceil((float)width / scale);
++        for (Activity* activity : Application::activitiesStack)
++            activity->onWindowSizeChanged();
++        brls::Application::setActiveEvent(true);
++        return;
++    }
++#endif
++
+     // Rescale UI
+     float uncappedWindowScale = (float)width / (float)ORIGINAL_WINDOW_WIDTH;
+     bool uiScaleIsCapped = Application::maximumUIScale > 0.0f
+@@ -1226,6 +1299,22 @@ void Application::setWindowSize(int width, int height)
+     brls::Application::setActiveEvent(true);
+ }
+ 
++#ifdef __SWITCH__
++void Application::setRotation(int quarterTurns)
++{
++    quarterTurns &= 3;
++    if (quarterTurns == Application::rotation)
++        return;
++    Application::rotation = quarterTurns;
++    Application::setWindowSize(Application::windowWidth, Application::windowHeight);
++}
++
++int Application::getRotation()
++{
++    return Application::rotation;
++}
++#endif
++
+ void Application::onWindowResized(int width, int height)
+ {
+     // Trigger event when Window size is stable

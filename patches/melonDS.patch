@@ -1,0 +1,336 @@
+diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.cpp b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
+index ca0ea12d..377b5263 100644
+--- a/src/ARMJIT_A64/ARMJIT_Compiler.cpp
++++ b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
+@@ -24,6 +24,15 @@
+ #include "../NDS.h"
+ #include "../ARMJIT_Global.h"
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++
++extern char __start__;
++
++// Switch: the compiler maps its own RX/RW code alias instead of using ARMJIT_Global.
++static constexpr size_t JitMemSize = 16 * 1024 * 1024;
++#endif
++
+ #include <stdlib.h>
+ 
+ using namespace Arm64Gen;
+@@ -210,6 +219,8 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
+ {
+ #ifdef __SWITCH__
+     JitRWBase = aligned_alloc(0x1000, JitMemSize);
++    if (!JitRWBase)
++        Log(LogLevel::Error, "JIT code: allocating %u bytes failed\n", (u32)JitMemSize);
+ 
+     JitRXStart = (u8*)&__start__ - JitMemSize - 0x1000;
+     virtmemLock();
+@@ -233,12 +244,23 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
+ 
+     assert(JitRXStart != NULL);
+ 
+-    bool succeded = R_SUCCEEDED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)JitRXStart, (u64)JitRWBase, JitMemSize));
++    // asserts are compiled out in release builds; log failures so they can be diagnosed
++    Result rc = svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)JitRXStart, (u64)JitRWBase, JitMemSize);
++    if (R_FAILED(rc))
++        Log(LogLevel::Error, "JIT code: svcMapProcessCodeMemory at %p failed (0x%x)\n", JitRXStart, rc);
++    bool succeded = R_SUCCEEDED(rc);
+     assert(succeded);
+-    succeded = R_SUCCEEDED(svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize, Perm_Rx));
++    rc = svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize, Perm_Rx);
++    if (R_FAILED(rc))
++        Log(LogLevel::Error, "JIT code: svcSetProcessMemoryPermission failed (0x%x)\n", rc);
++    succeded = R_SUCCEEDED(rc);
+     assert(succeded);
+-    succeded = R_SUCCEEDED(svcMapProcessMemory(JitRWStart, envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize));
++    rc = svcMapProcessMemory(JitRWStart, envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize);
++    if (R_FAILED(rc))
++        Log(LogLevel::Error, "JIT code: svcMapProcessMemory failed (0x%x)\n", rc);
++    succeded = R_SUCCEEDED(rc);
+     assert(succeded);
++    Log(LogLevel::Info, "JIT code: RX %p, RW %p\n", JitRXStart, JitRWStart);
+ 
+     virtmemUnlock();
+ 
+@@ -463,8 +485,10 @@ Compiler::~Compiler()
+     }
+ #endif
+ 
++#ifndef __SWITCH__
+     ARMJIT_Global::FreeCodeMem(CodeMemBase);
+     ARMJIT_Global::DeInit();
++#endif
+ }
+ 
+ void Compiler::LoadCycles()
+diff --git a/src/ARMJIT_Global.cpp b/src/ARMJIT_Global.cpp
+index 44766a78..b2d15c6c 100644
+--- a/src/ARMJIT_Global.cpp
++++ b/src/ARMJIT_Global.cpp
+@@ -3,6 +3,8 @@
+ 
+ #ifdef _WIN32
+ #include <windows.h>
++#elif defined(__SWITCH__)
++// Switch: the A64 compiler maps its own code memory (see ARMJIT_Compiler.cpp)
+ #else
+ #include <sys/mman.h>
+ #include <unistd.h>
+@@ -21,7 +23,7 @@ namespace ARMJIT_Global
+ 
+ std::mutex globalMutex;
+ 
+-#if !defined(__APPLE__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
++#if !defined(__APPLE__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__SWITCH__)
+ static constexpr size_t NumCodeMemSlices = 4;
+ static constexpr size_t CodeMemoryAlignedSize = NumCodeMemSlices * CodeMemorySliceSize;
+ 
+@@ -40,6 +42,9 @@ int RefCounter = 0;
+ 
+ void* AllocateCodeMem()
+ {
++#ifdef __SWITCH__
++    return nullptr;  // unused on Switch
++#else
+     std::lock_guard guard(globalMutex);
+ 
+ #if !defined(__APPLE__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
+@@ -63,10 +68,14 @@ void* AllocateCodeMem()
+     //printf("mmaping...\n");
+     return mmap(nullptr, CodeMemorySliceSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+ #endif
++#endif // __SWITCH__
+ }
+ 
+ void FreeCodeMem(void* codeMem)
+ {
++#ifdef __SWITCH__
++    (void)codeMem;  // unused on Switch
++#else
+     std::lock_guard guard(globalMutex);
+ 
+ #if !defined(__APPLE__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
+@@ -86,6 +95,7 @@ void FreeCodeMem(void* codeMem)
+ #else
+     munmap(codeMem, CodeMemorySliceSize);
+ #endif
++#endif // __SWITCH__
+ }
+ 
+ void Init()
+@@ -98,7 +108,7 @@ void Init()
+         #ifdef _WIN32
+             DWORD dummy;
+             VirtualProtect(GetAlignedCodeMemoryStart(), CodeMemoryAlignedSize, PAGE_EXECUTE_READWRITE, &dummy);
+-        #elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
++        #elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__SWITCH__)
+             // these platforms always use dynamic allocation
+         #else
+             mprotect(GetAlignedCodeMemoryStart(), CodeMemoryAlignedSize, PROT_EXEC | PROT_READ | PROT_WRITE);
+diff --git a/src/ARMJIT_Memory.cpp b/src/ARMJIT_Memory.cpp
+index c64bad1f..3214fd52 100644
+--- a/src/ARMJIT_Memory.cpp
++++ b/src/ARMJIT_Memory.cpp
+@@ -119,23 +119,30 @@ using Platform::LogLevel;
+ // with LTO the symbols seem to be not properly overriden
+ // if they're somewhere else
+ 
+-void HandleFault(u64 pc, u64 lr, u64 fp, u64 faultAddr, u32 desc);
+-
+ extern "C"
+ {
+ 
+ void ARM_RestoreContext(u64* registers) __attribute__((noreturn));
+ 
+-extern char __start__;
+-extern char __rodata_start;
+-
+ alignas(16) u8 __nx_exception_stack[0x8000];
+ u64 __nx_exception_stack_size = 0x8000;
+ 
++// Returning hands the exception back to the kernel (normal crash report).
+ void __libnx_exception_handler(ThreadExceptionDump* ctx)
+ {
+-    ARMJIT_Memory::FaultDescription desc;
+-    u8* curArea = (u8*)(NDS::CurCPU == 0 ? ARMJIT_Memory::FastMem9Start : ARMJIT_Memory::FastMem7Start);
++    melonDS::ARMJIT_Memory::HandleSwitchException(ctx);
++}
++
++}
++
++void ARMJIT_Memory::HandleSwitchException(ThreadExceptionDump* ctx)
++{
++    melonDS::NDS* nds = melonDS::NDS::Current;
++    if (!nds)
++        return;
++
++    FaultDescription desc {};
++    u8* curArea = (u8*)(nds->CurCPU == 0 ? nds->JIT.Memory.FastMem9Start : nds->JIT.Memory.FastMem7Start);
+     desc.EmulatedFaultAddr = (u8*)ctx->far.x - curArea;
+     desc.FaultPC = (u8*)ctx->pc.x;
+ 
+@@ -146,16 +153,12 @@ void __libnx_exception_handler(ThreadExceptionDump* ctx)
+     integerRegisters[31] = ctx->sp.x;
+     integerRegisters[32] = ctx->pc.x;
+ 
+-    if (Melon::FaultHandler(desc))
++    if (FaultHandler(desc, *nds))
+     {
+         integerRegisters[32] = (u64)desc.FaultPC;
+ 
+         ARM_RestoreContext(integerRegisters);
+     }
+-
+-    HandleFault(ctx->pc.x, ctx->lr.x, ctx->fp.x, ctx->far.x, ctx->error_desc);
+-}
+-
+ }
+ 
+ #elif defined(_WIN32)
+@@ -462,7 +465,7 @@ void ARMJIT_Memory::Mapping::Unmap(int region, melonDS::NDS& nds) noexcept
+             {
+                 u32 segmentSize = offset - segmentOffset;
+                 Log(LogLevel::Debug, "unmapping %x %x %x %x\n", Addr + segmentOffset, Num, segmentOffset + LocalOffset + OffsetsPerRegion[region], segmentSize);
+-                bool success = memory.UnmapFromRange(Addr + segmentOffset, Num, segmentOffset + LocalOffset + OffsetsPerRegion[region], segmentSize);
++                bool success = nds.JIT.Memory.UnmapFromRange(Addr + segmentOffset, Num, segmentOffset + LocalOffset + OffsetsPerRegion[region], segmentSize);
+                 assert(success);
+             }
+ #endif
+@@ -756,6 +759,9 @@ bool ARMJIT_Memory::IsFastMemSupported()
+         ARMJIT_Global::DeInit();
+ 
+         PageSize = RegularPageSize;
++#elif defined(__SWITCH__)
++        PageSize = RegularPageSize;
++        isSupported = true;
+ #else
+         PageSize = sysconf(_SC_PAGESIZE);
+         isSupported = PageSize == RegularPageSize || PageSize == LargePageSize;
+@@ -783,6 +789,8 @@ void ARMJIT_Memory::RegisterFaultHandler()
+     {
+         Log(LogLevel::Error, "Could not load new Windows virtual memory functions, fast memory is disabled.\n");
+     }
++#elif defined(__SWITCH__)
++    // nothing to register: __libnx_exception_handler is a link-time override
+ #else
+     struct sigaction sa;
+     sa.sa_handler = nullptr;
+@@ -810,6 +818,7 @@ void ARMJIT_Memory::UnregisterFaultHandler()
+         FreeLibrary(KernelBaseDll);
+         KernelBaseDll = nullptr;
+     }
++#elif defined(__SWITCH__)
+ #else
+     sigaction(SIGSEGV, &OldSaSegv, nullptr);
+ #ifdef __APPLE__
+@@ -845,15 +854,24 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds) : NDS(nds)
+ {
+     ARMJIT_Global::Init();
+ #if defined(__SWITCH__)
+-    MemoryBase = (u8*)aligned_alloc(0x1000, MemoryTotalSize);
++    // asserts are compiled out in release builds; log failures so they can be diagnosed
++    MemoryHeap = (u8*)aligned_alloc(0x1000, MemoryTotalSize);
++    if (!MemoryHeap)
++        Log(LogLevel::Error, "JIT memory: allocating %u bytes failed\n", (u32)MemoryTotalSize);
+     virtmemLock();
+     MemoryBaseCodeMem = (u8*)virtmemFindCodeMemory(MemoryTotalSize, 0x1000);
+ 
+-    bool succeded = R_SUCCEEDED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem,
+-        (u64)MemoryBase, MemoryTotalSize));
++    Result rc = svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem,
++        (u64)MemoryHeap, MemoryTotalSize);
++    if (R_FAILED(rc))
++        Log(LogLevel::Error, "JIT memory: svcMapProcessCodeMemory failed (0x%x)\n", rc);
++    bool succeded = R_SUCCEEDED(rc);
+     assert(succeded);
+-    succeded = R_SUCCEEDED(svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem,
+-        MemoryTotalSize, Perm_Rw));
++    rc = svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem,
++        MemoryTotalSize, Perm_Rw);
++    if (R_FAILED(rc))
++        Log(LogLevel::Error, "JIT memory: svcSetProcessMemoryPermission failed (0x%x)\n", rc);
++    succeded = R_SUCCEEDED(rc);
+     assert(succeded);
+ 
+     // 8 GB of address space, just don't ask...
+@@ -861,12 +879,15 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds) : NDS(nds)
+     assert(FastMem9Start);
+     FastMem7Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
+     assert(FastMem7Start);
++    if (!FastMem9Start || !FastMem7Start)
++        Log(LogLevel::Error, "JIT memory: no address space for fastmem\n");
++    Log(LogLevel::Info, "JIT memory: block %p, fastmem9 %p, fastmem7 %p\n", MemoryBaseCodeMem, FastMem9Start, FastMem7Start);
+ 
+     FastMem9Reservation = virtmemAddReservation(FastMem9Start, AddrSpaceSize);
+     FastMem7Reservation = virtmemAddReservation(FastMem7Start, AddrSpaceSize);
+     virtmemUnlock();
+ 
+-    u8* basePtr = MemoryBaseCodeMem;
++    MemoryBase = MemoryBaseCodeMem;  // the heap buffer is inaccessible while aliased
+ #elif defined(_WIN32)
+     if (virtualAlloc2Ptr)
+     {
+@@ -923,8 +944,10 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds) : NDS(nds)
+ 
+     mmap(MemoryBase, MemoryTotalSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, MemoryFile, 0);
+ #endif
++#ifndef __SWITCH__
+     FastMem9Start = MemoryBase+MemoryTotalSize;
+     FastMem7Start = static_cast<u8*>(FastMem9Start)+AddrSpaceSize;
++#endif
+ }
+ 
+ ARMJIT_Memory::~ARMJIT_Memory() noexcept
+@@ -941,8 +964,9 @@ ARMJIT_Memory::~ARMJIT_Memory() noexcept
+     FastMem7Reservation = nullptr;
+     virtmemUnlock();
+ 
+-    svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem, (u64)MemoryBase, MemoryTotalSize);
+-    free(MemoryBase);
++    svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem, (u64)MemoryHeap, MemoryTotalSize);
++    free(MemoryHeap);
++    MemoryHeap = nullptr;
+     MemoryBase = nullptr;
+ #elif defined(_WIN32)
+     if (virtualAlloc2Ptr)
+diff --git a/src/ARMJIT_Memory.h b/src/ARMJIT_Memory.h
+index 4bf660e1..5d857c52 100644
+--- a/src/ARMJIT_Memory.h
++++ b/src/ARMJIT_Memory.h
+@@ -143,6 +143,10 @@ public:
+ 
+     static void RegisterFaultHandler();
+     static void UnregisterFaultHandler();
++#if defined(__SWITCH__)
++    // Called from libnx's __libnx_exception_handler; returns if the fault isn't ours.
++    static void HandleSwitchException(ThreadExceptionDump* ctx);
++#endif
+ 
+     static u32 PageSize;
+     static u32 PageShift;
+@@ -174,7 +178,10 @@ private:
+ 
+ #if defined(__SWITCH__)
+     VirtmemReservation* FastMem9Reservation, *FastMem7Reservation;
++    // svcMapProcessCodeMemory makes the heap buffer inaccessible, so MemoryBase points at
++    // the RW alias (== MemoryBaseCodeMem); MemoryHeap is kept only to unmap/free it.
+     u8* MemoryBaseCodeMem;
++    u8* MemoryHeap;
+ #elif defined(_WIN32)
+     struct VirtmemPlaceholder
+     {
+diff --git a/src/GPU.h b/src/GPU.h
+index b0e1faf1..c59ce61c 100644
+--- a/src/GPU.h
++++ b/src/GPU.h
+@@ -806,7 +806,7 @@ private:
+ 
+     std::unique_ptr<Renderer> Rend = nullptr;
+ 
+-    u16 VRAMCaptureBlockFlags[16];
++    u16 VRAMCaptureBlockFlags[16] {};
+ 
+     u16* VRAMCBF_ABG[0x20] {};
+     u16* VRAMCBF_AOBJ[0x10] {};

@@ -1,0 +1,16 @@
+# Build output
+switch/build/
+switch/*.nro
+switch/*.nacp
+switch/*.elf
+switch/*.nso
+switch/*.pfs0
+switch/*.lst
+switch/*.map
+*.tmp
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store

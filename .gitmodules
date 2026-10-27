@@ -1,0 +1,11 @@
+[submodule "mds_upstream"]
+	path = mds_upstream
+	url = https://github.com/melonDS-emu/melonDS.git
+	ignore = dirty
+[submodule "borealis"]
+	path = borealis
+	url = https://github.com/XITRIX/borealis.git
+	ignore = dirty
+[submodule "rcheevos"]
+	path = rcheevos
+	url = https://github.com/RetroAchievements/rcheevos.git
