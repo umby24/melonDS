@@ -89,7 +89,7 @@ Headers under `switch/source/` are the contract. Summary:
 | `platform/input.h` | platform | Poll hid each frame; report DS buttons, raw touch point, right stick, hotkeys; button-set parsing; raw pad reads for bind dialogs |
 | `platform/http.h` | platform | HTTP(S) on curl: an ordered async queue on one worker thread (RetroAchievements), plus blocking `get` for bulk downloads |
 | `platform/keyboard.h` | platform | System software keyboard (text and password) |
-| `platform/system.h` | platform | Misc libnx services for the frontend (pin a thread to a CPU core, local time, CPU clock, memory usage) |
+| `platform/system.h` | platform | Misc libnx services for the frontend (pin a thread to a CPU core, local time, CPU and GPU clocks, memory usage) |
 | `gpu/deko_renderer.h` | gpu | `make_hybrid_renderer`: a `melonDS::Renderer` with the software 2D engines and a deko3d port of upstream's compute 3D renderer (own queue on borealis' device; 3D lines read back per frame). Installed by `emu_host` at load when option `renderer` is `gpu` (`gpu_3d_delay`, default on: show the 3D one frame late so emulation never waits for the GPU); falls back to software |
 | `gpu/frame_upload.h` | gpu | Update a NanoVG image with GPU copies queued on borealis' deko3d queue (no per-frame idle wait); falls back to `nvgUpdateImage` |
 | `frontend/emu_host.h` | frontend | Own the NDS instance, paths, saves/states, layout and the emulation thread; pause/resume, stats, composed frames |

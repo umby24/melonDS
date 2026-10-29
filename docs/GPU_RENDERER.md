@@ -73,7 +73,7 @@ in place of GL and offline-compiled shaders.
   variants exactly as `ComputeRenderer3D::CompileShader` assembles them, with three
   text adaptations (loose uniforms → a uniform block; the `SetupIndices` texel buffer → a
   storage buffer; the final pass writes packed RGB6A5 to a storage buffer instead of a
-  normalised image). `uam` compiles each into `romfs:/shaders/compute3d/`. If upstream
+  normalised image), plus a faster `Div64_32_32` (below). `uam` compiles each into `romfs:/shaders/compute3d/`. If upstream
   changes a replaced line, the tool fails the configure step with the pattern's name.
 - Display captures used as textures come from VRAM like any texture (the CPU 2D engines
   write captures to VRAM), so upstream's capture-texture path is not used.
@@ -152,6 +152,27 @@ The original plan:
   - So R1 now matches software speed and frees the 3D thread's CPU core. Beating software
     needs a cheaper GPU frame: per-pass timestamps to find the expensive passes; ~4 ms for
     250 polygons suggests fixed per-pass cost (barriers, full-screen passes) dominates.
+- Per-pass GPU timestamps (logged as `[gpu] 3D passes, ...`), 2026-10-29:
+  - Rasterise is 55-65% of the frame in every scene (SM64DS title, ~1,100 polygons:
+    4.4-5.0 of 7.4-8.1 ms; Platinum, ~300 polygons: 2.4-3.0 of 4.3-5.0 ms).
+  - Depth blend is ~0.45 ms even with 6 polygons. Clear+spans ~1 ms, bin ~0.55 ms at
+    1,100 polygons.
+  - Only 1-16 variants per frame, so dispatch overhead isn't the problem; per-pixel cost
+    is.
+- Changes from that:
+  - The per-pixel `Div64_32_32` (a software 64/32 division) is replaced in the generator
+    by a float estimate plus an exact `umulExtended` correction. For its callers the
+    quotient is <= 512, so the result is identical: checked against exact division over
+    160M random inputs in the callers' ranges, including a float divide made 3 ulps
+    worse than IEEE.
+  - Option `gpu_clock` (stock / 460.8 / 614.4 / 768 MHz, never below the clock the app
+    started with): handheld apps run the GPU at 384 MHz by default.
+- Result (2026-10-29, GPU frame time, before -> after the division change):
+  - SM64DS title, ~1,100 polygons: 7.4-8.1 -> 4.1-4.4 ms handheld; 2.2-3.0 ms docked.
+    Rasterise 4.4-5.0 -> 2.2-2.4 ms; clear+spans ~1.0 -> ~0.6 ms.
+  - Platinum, ~300 polygons: 4.3-5.0 -> 2.4-2.5 ms handheld; 1.7-1.9 ms docked.
+  - With the GPU this fast, the emu thread's own cost (~0.4-1 ms of CPU setup per frame)
+    is what's left between R1 and "free 3D".
 - Indirect dispatch and atomics: the old port's compute renderer used them under deko3d,
   so they should work, but upstream's newer shaders may differ.
 - Save states mid-frame and `RestartFrame`: the GL renderer's behaviour is the reference.

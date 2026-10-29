@@ -76,6 +76,7 @@ _Code for every item below exists and builds against melonDS (2026-10-26); tick 
 ### Phase 4 — Performance
 - [x] On-device FPS / frame-time readout (option `show_fps`)
 - [ ] CPU clock option (stock / 1224 / 1581 / 1785 MHz via clkrst or pcv; applied while a game runs, re-applied every minute, restored on exit; code exists, untested)
+- [ ] GPU clock option `gpu_clock` (stock / 460.8 / 614.4 / 768 MHz, never below the starting clock; same handling as the CPU clock; code exists, untested)
 - [x] Threading: emulation on its own thread (core 1), paced to 59.83 Hz, triple-buffered frames to the UI (2026-10-26, 100% speed)
 - [x] AArch64 JIT on Switch (2026-10-26: ~85% speed without fastmem on the first test game; option `jit`, default on)
 - [x] JIT fastmem (2026-10-26: ~100% speed on the same game; option `fastmem`, now default on)

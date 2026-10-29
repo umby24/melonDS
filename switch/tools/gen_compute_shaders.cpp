@@ -8,7 +8,10 @@
 // - the SetupIndices texel buffer becomes a storage buffer (binding 3) of packed u16x4;
 // - the final pass writes the packed RGB6A5 colour (the software renderer's 3D line
 //   format) into a storage buffer (binding 1) instead of normalising it into an image,
-//   so the CPU 2D engines can read it as is.
+//   so the CPU 2D engines can read it as is;
+// - Div64_32_32 (a software 64/32-bit division, run per pixel) is replaced by a float
+//   estimate plus an exact integer correction, which gives the same quotient for its
+//   callers' range (see kFastDiv64).
 // The variant list and the file names must match gpu/deko_renderer3d.cpp.
 
 #include <cstdio>
@@ -29,6 +32,30 @@ constexpr int kCoarseTileCountY = 4;
 constexpr int kCoarseTileArea = 8 * kCoarseTileCountY;
 constexpr int kClearCoarseBinMaskLocalSize = 64;
 constexpr int kMaxWorkTiles = (kScreenWidth / kTileSize) * (kScreenHeight / kTileSize) * 16;
+
+// Both callers (CalcYFactorX / CalcYFactorY) divide (x*a << YFactorShift) by
+// (x*a' + y*b) with a <= a', so the quotient is at most 1 << 9. A float quotient is then
+// within +-1 of the true one (operands rounded to 24 bits, |error| < 2^-13), and one
+// correction step against the exact 64-bit product makes it exact.
+const char* const kFastDiv64 = R"(uint Div64_32_32(uint numHi, uint numLo, uint den)
+{
+    // melonds-next: float estimate + exact correction (quotient <= 512 for all callers)
+    float n = float(numHi) * 4294967296.0 + float(numLo);
+    uint q = uint(n / float(den));
+    uint hi, lo;
+    umulExtended(q, den, hi, lo);
+    if (hi > numHi || (hi == numHi && lo > numLo))
+    {
+        q--;
+    }
+    else
+    {
+        umulExtended(q + 1U, den, hi, lo);
+        if (hi < numHi || (hi == numHi && lo <= numLo))
+            q++;
+    }
+    return q;
+})";
 
 void replace_once(std::string& s, const std::string& from, const std::string& to, const char* what) {
     size_t at = s.find(from);
@@ -55,7 +82,21 @@ std::string assemble(const std::string& body, const std::vector<const char*>& de
     return src;
 }
 
+void replace_function(std::string& s, const std::string& start, const std::string& end, const char* with,
+                      const char* what) {
+    size_t a = s.find(start);
+    size_t b = a == std::string::npos ? a : s.find(end, a);
+    if (b == std::string::npos) {
+        fprintf(stderr, "gen_compute_shaders: %s: function not found (upstream changed?)\n", what);
+        exit(1);
+    }
+    s.replace(a, b + end.size() - a, with);
+}
+
 std::string adapt(std::string src) {
+    if (src.find("uint Div64_32_32(") != std::string::npos)
+        replace_function(src, "uint Div64_32_32(uint numHi, uint numLo, uint den)",
+                         "    return bitfieldInsert(qhat, q1, 16, 16);\n}", kFastDiv64, "Div64_32_32");
     if (src.find("uniform uint CurVariant;") != std::string::npos) {
         replace_once(src,
             "layout (location = 0) uniform uint CurVariant;\n"

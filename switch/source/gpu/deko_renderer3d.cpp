@@ -78,6 +78,15 @@ constexpr u32 kSamplerRepeat = 4;   // repeat x repeat (the clear bitmaps)
 
 constexpr u32 kStagingSize = 16 << 20;    // per slot: texture uploads + polygon data
 constexpr int kSlots = 2;
+
+// GPU timestamps per frame: the start, then the end of each pass group.
+enum Mark {
+    kMarkStart, kMarkUploads, kMarkSpans, kMarkBin, kMarkOffsets, kMarkSort, kMarkRasterise,
+    kMarkDepthBlend, kMarkFinal, kNumMarks,
+};
+const char* const kPassNames[kNumMarks - 1] = {
+    "uploads", "clear+spans", "bin", "offsets", "sort", "rasterise", "depth blend", "final",
+};
 constexpr u32 kCmdChunkSize = 256 << 10;  // command memory, grown on demand
 
 // Upstream's ComputeRenderer3D structs; the shaders depend on these layouts.
@@ -303,7 +312,7 @@ class DekoRenderer3D final : public melonDS::Renderer3D {
         Buffer staging;
         uint32_t staging_used = 0;
         Buffer output;      // 256x192 packed RGB6A5, read by GetLine
-        Buffer timestamps;  // GPU timestamps at the start (+0) and end (+16) of the frame
+        Buffer timestamps;  // one counter report (16 bytes) per Mark
         dk::Fence done = {};
         bool in_flight = false;
         bool timed = false;  // the work in flight is a whole frame with timestamps
@@ -317,6 +326,7 @@ class DekoRenderer3D final : public melonDS::Renderer3D {
     void submit(bool timed);
     DkGpuAddr stage(const void* data, uint32_t size);
     void upload(Buffer& dst, const void* data, uint32_t size);
+    void mark(Mark m) { cmd_.reportCounter(DkCounter_Timestamp, slots_[cur_].timestamps.gpu() + 16 * m); }
     static void add_cmd_memory(void* user, DkCmdBuf cmdbuf, size_t min_size);
 
     void SetupAttrs(SpanSetupY* span, melonDS::Polygon* poly, int from, int to);
@@ -366,7 +376,8 @@ class DekoRenderer3D final : public melonDS::Renderer3D {
     struct Stats {
         uint64_t setup_ns = 0, wait_ns = 0, max_setup_ns = 0, max_wait_ns = 0;
         uint64_t queued_ns = 0, busy_ns = 0, max_busy_ns = 0;  // from GPU timestamps
-        unsigned timed = 0;
+        uint64_t pass_ns[kNumMarks - 1] = {};
+        unsigned timed = 0, variants = 0;
         unsigned frames = 0, rendered = 0, polygons = 0, dropped = 0;
     } stats_;
     void log_stats();
@@ -447,7 +458,7 @@ bool DekoRenderer3D::Init() {
     for (Slot& slot : slots_)
         ok = ok && slot.staging.create(device_, kStagingSize, kCpuInput) &&
              slot.output.create(device_, 4 * kScreenWidth * kScreenHeight, kCpuRead) &&
-             slot.timestamps.create(device_, 64, kCpuRead);
+             slot.timestamps.create(device_, 16 * kNumMarks, kCpuRead);
     for (auto& t : tiles_)
         ok = ok && t.create(device_, 4 * kTileSize * kTileSize * kMaxWorkTiles, kGpuOnly);
     if (!ok) {
@@ -525,6 +536,14 @@ void DekoRenderer3D::log_stats() {
             st.timed ? st.busy_ns / 1e6 / st.timed : 0.0, st.max_busy_ns / 1e6,
             st.rendered ? st.polygons / st.rendered : 0,
             st.dropped ? ", some polygons dropped (span limit)" : "");
+    if (st.timed) {
+        char line[256];
+        int n = snprintf(line, sizeof(line), "[gpu] 3D passes, avg ms per rendered frame:");
+        for (int m = 0; m < kNumMarks - 1 && n < int(sizeof(line)); ++m)
+            n += snprintf(line + n, sizeof(line) - n, " %s %.2f%s", kPassNames[m], st.pass_ns[m] / 1e6 / st.timed,
+                          m + 1 < kNumMarks - 1 ? "," : "");
+        fprintf(stderr, "%s; avg %u variants\n", line, st.rendered ? st.variants / st.rendered : 0);
+    }
     st = {};
 }
 
@@ -538,8 +557,12 @@ void DekoRenderer3D::wait_slot(Slot& slot) {
             slot.timestamps.mem.flushCpuCache(0, slot.timestamps.size);
             // A counter report is {value, timestamp}; the timestamp is the second word.
             const auto* ts = static_cast<const uint64_t*>(slot.timestamps.cpu());
-            uint64_t start = ts[1], end = ts[3];
+            uint64_t start = ts[2 * kMarkStart + 1], end = ts[2 * kMarkFinal + 1];
             if (end >= start && start >= slot.submit_ts) {
+                for (int m = 1; m < kNumMarks; ++m) {
+                    uint64_t a = ts[2 * (m - 1) + 1], b = ts[2 * m + 1];
+                    stats_.pass_ns[m - 1] += b >= a ? dkTimestampToNs(b - a) : 0;
+                }
                 uint64_t busy = dkTimestampToNs(end - start);
                 stats_.queued_ns += dkTimestampToNs(start - slot.submit_ts);
                 stats_.busy_ns += busy;
@@ -570,7 +593,7 @@ void DekoRenderer3D::begin_commands() {
     slot.staging_used = 0;
     cmd_.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_Shader |
                                      DkInvalidateFlags_Descriptors | DkInvalidateFlags_L2Cache);
-    cmd_.reportCounter(DkCounter_Timestamp, slot.timestamps.gpu());
+    mark(kMarkStart);
 }
 
 void DekoRenderer3D::submit(bool timed) {
@@ -1104,6 +1127,8 @@ void DekoRenderer3D::RenderFrame() {
 
     // Uploads above must land before anything reads them.
     cmd_.barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache);
+    mark(kMarkUploads);
+    stats_.variants += numVariants;
 
     // bind everything
     cmd_.bindImageDescriptorSet(image_descs_.gpu(), kNumImageDescriptors);
@@ -1130,22 +1155,26 @@ void DekoRenderer3D::RenderFrame() {
         cmd_.bindShaders(DkStageFlag_Compute, {&shaders_[wbuffer ? kInterpSpansW : kInterpSpansZ]});
         cmd_.dispatchCompute((numSetupIndices + 31) / 32, 1, 1);
         cmd_.barrier(DkBarrier_Primitives, 0);
+        mark(kMarkSpans);
 
         // bin polygons
         cmd_.bindShaders(DkStageFlag_Compute, {&shaders_[kBinCombined]});
         cmd_.dispatchCompute((numPolygons + 31) / 32, kScreenWidth / kCoarseTileW,
                              kScreenHeight / kCoarseTileH);
         cmd_.barrier(DkBarrier_Primitives, 0);
+        mark(kMarkBin);
 
         // calculate list offsets
         cmd_.bindShaders(DkStageFlag_Compute, {&shaders_[kCalculateWorkOffsets]});
         cmd_.dispatchCompute((numVariants + 31) / 32, 1, 1);
         cmd_.barrier(DkBarrier_Primitives, 0);
+        mark(kMarkOffsets);
 
         // sort shader work
         cmd_.bindShaders(DkStageFlag_Compute, {&shaders_[kSortWork]});
         cmd_.dispatchComputeIndirect(bin_result_.gpu() + offsetof(BinResultHeader, SortWorkWorkCount));
         cmd_.barrier(DkBarrier_Primitives, 0);
+        mark(kMarkSort);
 
         // the tile buffers take bindings 2-4 from here on
         cmd_.bindStorageBuffers(DkStage_Compute, 2, {tiles_[0].extents(), tiles_[1].extents(), tiles_[2].extents()});
@@ -1195,8 +1224,12 @@ void DekoRenderer3D::RenderFrame() {
             cmd_.pushConstants(variant_ubo_.gpu(), variant_ubo_.size, 0, sizeof(vu), &vu);
             cmd_.dispatchComputeIndirect(bin_result_.gpu() + offsetof(BinResultHeader, VariantWorkCount) + i * 4 * 4);
         }
+    } else {
+        for (Mark m : {kMarkSpans, kMarkBin, kMarkOffsets, kMarkSort})
+            mark(m);
     }
     cmd_.barrier(DkBarrier_Primitives, 0);
+    mark(kMarkRasterise);
 
     // compose final image
     cmd_.bindStorageBuffers(DkStage_Compute, 2, {tiles_[0].extents(), tiles_[1].extents(), tiles_[2].extents()});
@@ -1206,6 +1239,7 @@ void DekoRenderer3D::RenderFrame() {
     cmd_.bindShaders(DkStageFlag_Compute, {&shaders_[wbuffer ? kDepthBlendW : kDepthBlendZ]});
     cmd_.dispatchCompute(kScreenWidth / kTileSize, kScreenHeight / kTileSize, 1);
     cmd_.barrier(DkBarrier_Primitives, 0);
+    mark(kMarkDepthBlend);
 
     // the final pass writes the output buffer at binding 1
     cmd_.bindStorageBuffers(DkStage_Compute, 1, {slots_[cur_].output.extents()});
@@ -1219,7 +1253,7 @@ void DekoRenderer3D::RenderFrame() {
     cmd_.bindShaders(DkStageFlag_Compute, {&shaders_[kFinalPass0 + finalPassShader]});
     cmd_.dispatchCompute(kScreenWidth / 32, kScreenHeight, 1);
     cmd_.barrier(DkBarrier_Full, 0);
-    cmd_.reportCounter(DkCounter_Timestamp, slots_[cur_].timestamps.gpu() + 16);
+    mark(kMarkFinal);
 
     submit(true);
     latest_ = cur_;

@@ -333,6 +333,9 @@ void define_options() {
                     {"Next to the ROM", "melonds-next folder"});
     options::define("cpu_clock", "CPU clock while playing", {"stock", "1224", "1581", "1785"},
                     {"Stock (1020 MHz)", "1224 MHz", "1581 MHz", "1785 MHz"});
+    options::define("gpu_clock", "GPU clock while playing (helps the GPU renderer)",
+                    {"stock", "460800", "614400", "768000"},
+                    {"Stock (384 MHz handheld, 768 docked)", "460.8 MHz", "614.4 MHz", "768 MHz (docked speed)"});
     options::define("direct_boot", "Direct boot (skip firmware menu)", {"on", "off"}, {"On", "Off"});
     options::define("jit", "JIT recompiler (applies to the next game)", {"on", "off"}, {"On", "Off"});
     options::define("fastmem", "JIT fast memory (applies to the next game)", {"on", "off"}, {"On", "Off"});
@@ -375,12 +378,17 @@ melonDS::AudioInterpolation interpolation_option() {
 }
 
 // Higher clocks cost battery and heat; restored to stock when the game ends.
-void apply_cpu_clock() {
-    const std::string& v = options::get("cpu_clock");
-    if (v == "stock")
+void apply_clocks() {
+    const std::string& cpu = options::get("cpu_clock");
+    if (cpu == "stock")
         sys::restore_cpu_clock();
-    else if (!sys::set_cpu_clock_mhz(unsigned(std::stoul(v))))
-        fprintf(stderr, "[host] setting the CPU clock to %s MHz failed\n", v.c_str());
+    else if (!sys::set_cpu_clock_mhz(unsigned(std::stoul(cpu))))
+        fprintf(stderr, "[host] setting the CPU clock to %s MHz failed\n", cpu.c_str());
+    const std::string& gpu = options::get("gpu_clock");
+    if (gpu == "stock")
+        sys::restore_gpu_clock();
+    else if (!sys::set_gpu_clock_khz(unsigned(std::stoul(gpu))))
+        fprintf(stderr, "[host] setting the GPU clock to %s kHz failed\n", gpu.c_str());
 }
 
 // Pushes option values into the running core.
@@ -392,7 +400,7 @@ void apply_options() {
     rs.Threaded = options::is("threaded_3d", "on");
     g_nds->GetRenderer().SetRenderSettings(rs);
     g_nds->SPU.SetInterpolation(interpolation_option());
-    apply_cpu_clock();
+    apply_clocks();
     apply_input_options();
 }
 
@@ -628,7 +636,7 @@ void* emu_thread_main(void*) {
         if (g_frame_count % kRtcSyncFrames == 0) {
             set_rtc_to_now();
             std::lock_guard<std::mutex> lk(g_mx);
-            apply_cpu_clock();  // the OS resets it after HOME-menu visits
+            apply_clocks();  // the OS resets them after HOME-menu visits
         }
 
         clock::time_point t0 = clock::now();
@@ -877,6 +885,7 @@ void unload_game() {
         return;
     stop_emu_thread();
     sys::restore_cpu_clock();
+    sys::restore_gpu_clock();
     achievements::on_game_unloaded();
     cheats::on_game_unloaded();
     flush_save();

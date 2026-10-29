@@ -404,7 +404,7 @@ brls::View* OverlayActivity::createContentView() {
     action(list, "Controls and hotkeys", [] { open_input_settings(); });
 
     section(list, "Emulation");
-    add_option_cells(list, {"cpu_clock", "audio_interpolation", "threaded_3d"});
+    add_option_cells(list, {"cpu_clock", "gpu_clock", "audio_interpolation", "threaded_3d"});
 
     section(list, "Cheats");
     action(list, "Manage cheats", [] {

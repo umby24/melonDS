@@ -21,6 +21,11 @@ bool local_time(LocalTime& out);
 bool set_cpu_clock_mhz(unsigned mhz);
 void restore_cpu_clock();
 
+// GPU clock, the same way (kHz: the GPU's steps aren't whole MHz, e.g. 460800). Never
+// set below the clock the app started with.
+bool set_gpu_clock_khz(unsigned khz);
+void restore_gpu_clock();
+
 // Process memory in bytes: currently used, and the total the process may use (much
 // lower in applet mode than when launched via title override).
 void memory_usage(unsigned long long& used, unsigned long long& total);
