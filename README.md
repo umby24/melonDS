@@ -128,6 +128,7 @@ Developer docs:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): module contracts, threading, data formats.
 - [docs/PLAN.md](docs/PLAN.md): roadmap and status.
 - [docs/CORE_PATCHES.md](docs/CORE_PATCHES.md): every change to the submodules.
+- [docs/GPU_RENDERER.md](docs/GPU_RENDERER.md): plan for a deko3d (GPU) renderer.
 
 ## Credits
 

@@ -25,7 +25,9 @@ switch/               the Switch app
   source/main.cpp     app lifecycle; borealis owns the window and main loop
   source/frontend/    melonDS host + our Platform:: implementation, options (no libnx here)
   source/platform/    libnx audio / input / system / http (curl) / keyboard (libnx only here)
+  source/gpu/         deko3d code (frame upload; the future deko3d renderer, docs/GPU_RENDERER.md)
   source/ui/          borealis activities: ROM list, settings, game view, in-game overlay
+  tools/              build-time host tools (gen_compute_shaders: upstream's compute 3D shaders -> uam)
 scripts/              build helpers (docker wrapper, patch application)
 docs/                 PLAN.md, ARCHITECTURE.md, CORE_PATCHES.md
 ```
@@ -51,7 +53,8 @@ nxlink (`nxlink -s switch/melonds-next.nro`) or Ryujinx.
   never committed. This keeps rebasing on upstream feasible.
 - Never `std::thread::detach()` (libnx doesn't support it; it throws). Own and join threads.
 - `source/frontend/` must not include libnx headers; `source/platform/` is the only libnx
-  layer we write (borealis itself uses libnx internally; `ui/` only uses borealis). Module boundaries are the headers documented in `docs/ARCHITECTURE.md` — change
+  layer we write (borealis itself uses libnx internally; `ui/` only uses borealis; `source/gpu/`
+  uses deko3d and borealis' video context, behind headers with no deko3d types). Module boundaries are the headers documented in `docs/ARCHITECTURE.md` — change
   a header only together with that doc.
 - melonDS's AArch64 JIT is built (`MELONDS_JIT=ON` → `JIT_ENABLED`); its `__SWITCH__` paths
   needed patches (see `docs/CORE_PATCHES.md`). Options `jit` and `fastmem` (both default

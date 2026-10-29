@@ -19,7 +19,7 @@ pointer together with the patch.
 
 Upstream bases:
 - melonDS-emu/melonDS @ `7d8dea42`
-- XITRIX/borealis @ `8c1f1093` (built with `PLATFORM_SWITCH=ON USE_DEKO3D=ON`; one patch, below)
+- XITRIX/borealis @ `8c1f1093` (built with `PLATFORM_SWITCH=ON USE_DEKO3D=ON`; two patches, below)
 - RetroAchievements/rcheevos @ `a2f31ea` (v11.6.0+43, in `rcheevos/`; no patches)
 
 | File | Change | Reason |
@@ -39,6 +39,7 @@ Upstream bases:
 | File | Change | Reason |
 |---|---|---|
 | `library/include/borealis/core/application.hpp`, `library/lib/core/application.cpp` | On `__SWITCH__`: `Application::setRotation(quarterTurns)` / `getRotation()` and a `rotation` field. `frame()` translates + rotates the NanoVG transform before the UI scale; `setWindowSize` lays out a portrait content area (720 units wide, so text keeps its size) for 90°/270°; `processInput` maps raw touch points into the rotated space and rotates the D-pad / nav buttons and stick axes so "up" stays up on screen | Option `ui_rotation` (the whole interface rotated, for holding the console sideways). borealis has no rotation support of its own |
+| `library/include/borealis/extern/nanovg/dk_renderer.hpp`, `library/lib/extern/nanovg/deko3d/dk_renderer.cpp` | On `__SWITCH__`: public `nvg::DkRenderer::GetTextureImage(id)`, the `dk::Image` behind a NanoVG texture | `gpu::FrameUploader` updates the game image with GPU commands on borealis' queue instead of `nvgUpdateImage`, which waits for the queue to go idle on every call; a deko3d renderer will write its output the same way (docs/GPU_RENDERER.md) |
 
 ## Build-level differences from upstream CMake
 

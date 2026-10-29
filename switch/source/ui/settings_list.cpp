@@ -72,7 +72,7 @@ brls::View* make_settings_list() {
                             "filter", "show_fps"});
 
     add_header(list, "Emulation");
-    add_option_cells(list, {"cpu_clock", "jit", "fastmem", "threaded_3d", "audio_interpolation"});
+    add_option_cells(list, {"cpu_clock", "jit", "fastmem", "renderer", "gpu_3d_delay", "threaded_3d", "audio_interpolation"});
 
     auto* hint = new brls::Label();
     hint->setText("DSi mode uses bios9i.bin, bios7i.bin, firmware_dsi.bin and nand.bin from the system "

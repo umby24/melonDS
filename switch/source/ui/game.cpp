@@ -10,6 +10,7 @@
 #include "frontend/achievements.h"
 #include "frontend/emu_host.h"
 #include "frontend/options.h"
+#include "gpu/frame_upload.h"
 #include "platform/audio.h"
 #include "ui/achievements_view.h"
 #include "ui/cheats_view.h"
@@ -51,6 +52,7 @@ class GameView : public brls::View {
     }
 
     ~GameView() override {
+        uploader_.finish();
         if (image_)
             nvgDeleteImage(brls::Application::getNVGContext(), image_);
     }
@@ -62,6 +64,7 @@ class GameView : public brls::View {
     GameActivity* activity_;
     int image_ = 0;
     bool image_linear_ = false;
+    gpu::FrameUploader uploader_;
 
     // Layout inputs last sent to the host (it only needs a new layout when they change).
     struct LayoutKey {
@@ -152,6 +155,7 @@ void GameView::upload(NVGcontext* vg, const uint32_t* pixels) {
     bool linear = options::is("filter", "linear");
     const auto* data = reinterpret_cast<const unsigned char*>(pixels);
     if (image_ && linear != image_linear_) {
+        uploader_.finish();
         nvgDeleteImage(vg, image_);
         image_ = 0;
     }
@@ -159,7 +163,7 @@ void GameView::upload(NVGcontext* vg, const uint32_t* pixels) {
         image_ = nvgCreateImageRGBA(vg, int(host::kFrameWidth), int(host::kFrameHeight),
                                     linear ? 0 : NVG_IMAGE_NEAREST, data);
         image_linear_ = linear;
-    } else {
+    } else if (!uploader_.upload(vg, image_, data, host::kFrameWidth, host::kFrameHeight)) {
         nvgUpdateImage(vg, image_, data);
     }
 }

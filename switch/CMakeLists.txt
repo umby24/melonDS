@@ -107,7 +107,7 @@ target_compile_definitions(rcheevos PUBLIC RC_CLIENT_SUPPORTS_HASH)
 # App
 #---------------------------------------------------------------------------------
 file(GLOB APP_SOURCES CONFIGURE_DEPENDS
-    source/*.cpp source/frontend/*.cpp source/platform/*.cpp source/ui/*.cpp)
+    source/*.cpp source/frontend/*.cpp source/platform/*.cpp source/gpu/*.cpp source/ui/*.cpp)
 list(APPEND APP_SOURCES ${BOREALIS_LIBRARY}/lib/platforms/switch/switch_wrapper.c)
 # Upstream's screen layout math (desktop melonDS's sizing/emphasis rules); frontend-side
 # but self-contained, so we build it as is.
@@ -130,6 +130,36 @@ file(COPY ${BOREALIS_LIBRARY}/../resources/i18n DESTINATION ${ROMFS_DIR} PATTERN
 file(COPY ${BOREALIS_LIBRARY}/../resources/img/sys DESTINATION ${ROMFS_DIR}/img)
 file(COPY ${BOREALIS_LIBRARY}/../resources/material DESTINATION ${ROMFS_DIR})
 gen_dksh(${ROMFS_DIR}/shaders)
+
+# Upstream's compute 3D renderer shaders for gpu/deko_renderer3d: a host tool assembles
+# every variant from GPU3D_Compute_shaders.h (adapted to deko3d), uam compiles them.
+# Like gen_dksh, at configure time; re-run when the shaders or the tool change.
+set(COMPUTE3D_TOOL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_compute_shaders.cpp)
+set(COMPUTE3D_SHADERS_H ${MDS_SRC}/GPU3D_Compute_shaders.h)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${COMPUTE3D_TOOL_SRC} ${COMPUTE3D_SHADERS_H})
+set(COMPUTE3D_WORK ${CMAKE_CURRENT_BINARY_DIR}/compute3d)
+file(REMOVE_RECURSE ${COMPUTE3D_WORK})
+file(MAKE_DIRECTORY ${COMPUTE3D_WORK} ${ROMFS_DIR}/shaders/compute3d)
+execute_process(COMMAND c++ -std=c++17 -O1 -I${MDS_SRC} ${COMPUTE3D_TOOL_SRC} -o ${COMPUTE3D_WORK}/gen
+                RESULT_VARIABLE COMPUTE3D_RESULT)
+if (NOT COMPUTE3D_RESULT EQUAL 0)
+    message(FATAL_ERROR "building tools/gen_compute_shaders.cpp (host c++) failed")
+endif()
+execute_process(COMMAND ${COMPUTE3D_WORK}/gen ${COMPUTE3D_WORK} RESULT_VARIABLE COMPUTE3D_RESULT)
+if (NOT COMPUTE3D_RESULT EQUAL 0)
+    message(FATAL_ERROR "generating the compute 3D shaders failed")
+endif()
+find_program(NX_UAM_EXE NAMES uam HINTS "${DEVKITPRO}/tools/bin")
+file(GLOB COMPUTE3D_GLSL ${COMPUTE3D_WORK}/*.comp.glsl)
+foreach(GLSL ${COMPUTE3D_GLSL})
+    get_filename_component(NAME ${GLSL} NAME)
+    string(REPLACE ".comp.glsl" ".dksh" NAME ${NAME})
+    execute_process(COMMAND ${NX_UAM_EXE} -s comp -o ${ROMFS_DIR}/shaders/compute3d/${NAME} ${GLSL}
+                    RESULT_VARIABLE COMPUTE3D_RESULT)
+    if (NOT COMPUTE3D_RESULT EQUAL 0)
+        message(FATAL_ERROR "uam failed on ${GLSL}")
+    endif()
+endforeach()
 
 # melonDS's two-screens icon (as in the earlier Switch port), recoloured.
 set(APP_ICON ${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg)

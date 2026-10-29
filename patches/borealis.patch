@@ -26,6 +26,23 @@ index 857aee54..4cccc9e5 100644
      inline static float maximumUIScale = 0.0f;
  
      /**
+diff --git a/library/include/borealis/extern/nanovg/dk_renderer.hpp b/library/include/borealis/extern/nanovg/dk_renderer.hpp
+index b98cf369..e1f52b68 100644
+--- a/library/include/borealis/extern/nanovg/dk_renderer.hpp
++++ b/library/include/borealis/extern/nanovg/dk_renderer.hpp
+@@ -221,6 +221,12 @@ namespace nvg {
+             void InvalidateImageDescriptors(dk::CmdBuf cmdbuf);
+ 
+             void Flush(DKNVGcontext &ctx);
++
++#ifdef __SWITCH__
++            // melonds-next addition: the image behind a NanoVG texture, so it can be
++            // updated by GPU commands instead of UpdateTexture (which waits for the queue).
++            dk::Image* GetTextureImage(int id);
++#endif
+     };
+ 
+ }
 diff --git a/library/lib/core/application.cpp b/library/lib/core/application.cpp
 index 5b2c9ef9..fbeea2c1 100644
 --- a/library/lib/core/application.cpp
@@ -147,3 +164,21 @@ index 5b2c9ef9..fbeea2c1 100644
  void Application::onWindowResized(int width, int height)
  {
      // Trigger event when Window size is stable
+diff --git a/library/lib/extern/nanovg/deko3d/dk_renderer.cpp b/library/lib/extern/nanovg/deko3d/dk_renderer.cpp
+index 0367e982..118106b0 100644
+--- a/library/lib/extern/nanovg/deko3d/dk_renderer.cpp
++++ b/library/lib/extern/nanovg/deko3d/dk_renderer.cpp
+@@ -527,6 +527,13 @@ namespace nvg {
+         return 1;
+     }
+ 
++#ifdef __SWITCH__
++    dk::Image* DkRenderer::GetTextureImage(int id) {
++        const std::shared_ptr<Texture> texture = this->FindTexture(id);
++        return texture ? &texture->GetImage() : nullptr;
++    }
++#endif
++
+     int DkRenderer::GetTextureSize(const DKNVGcontext &ctx, int image, int *w, int *h) {
+         const auto descriptor = this->GetTextureDescriptor(ctx, image);
+         if (descriptor == nullptr) {

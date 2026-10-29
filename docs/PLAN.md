@@ -59,7 +59,8 @@ _Code for every item below exists and builds against melonDS (2026-10-26); tick 
 - [ ] Sleep/lid: close the DS lid on hotkey or when the Switch goes to sleep
 
 ### Phase 3 — Polish
-- [ ] GPU-side frame handling (currently CPU swizzle + texture upload per frame; optional shaders)
+- [x] GPU-side frame upload: `gpu::FrameUploader` queues the copy into the game image on borealis' deko3d queue instead of `nvgUpdateImage` (which waits for the GPU to go idle every frame) (2026-10-29)
+- [ ] deko3d renderer, staged (see `docs/GPU_RENDERER.md`): R1 compute 3D on the GPU with the software 2D engines (option `renderer = gpu`; works on hardware 2026-10-29 in SM64DS and Platinum, as fast as software with `gpu_3d_delay` on; GPU frame cost ~4-9 ms still to profile); R2 2D + compositing on the GPU; R3 upscaling
 - [ ] ROM folder setting with a folder picker (main menu Settings; code exists, untested)
 - [ ] Downloader tab: cover art (box or front cover) from GameTDB by game code into `thumbnails/<type>/<CODE>.png`, shown on the cards (option `card_image`) (code exists, untested)
 - [ ] Graphical ROM browser: card grid with icon + title + publisher from each ROM's banner, read in the background and cached (code exists, untested)
@@ -69,7 +70,7 @@ _Code for every item below exists and builds against melonDS (2026-10-26); tick 
 - [ ] Interface rotation (option `ui_rotation`, borealis patch; menus, game and touch rotate; code exists, untested)
 - [ ] Fast forward (hold/toggle, 2×/3×/4×/unlimited, audio kept short; code exists, untested)
 - [ ] RetroAchievements via rcheevos: login (token stored in `retroachievements.txt`), unlock/leaderboard notifications, achievement list in the overlay, progress saved with states, hardcore mode (no cheats or state loads) (login, notifications verified 2026-10-27; game identification fixed to hash the file bytes, untested). Badges/icons not shown yet
-- [ ] Upscaling: not available (melonDS only upscales in its OpenGL/compute renderers, which we don't build)
+- [ ] Upscaling: not available yet (melonDS only upscales in its OpenGL/compute renderers, which we don't build; stage R3 of the deko3d renderer)
 - [ ] Local wireless / Wi-Fi (`Platform::MP_*` / `Net_*` are stubs)
 
 ### Phase 4 — Performance

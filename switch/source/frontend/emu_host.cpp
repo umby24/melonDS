@@ -38,6 +38,7 @@
 #include "frontend/cheats.h"
 #include "frontend/melon_platform.h"
 #include "frontend/options.h"
+#include "gpu/deko_renderer.h"
 #include "platform/audio.h"
 #include "platform/input.h"
 #include "platform/system.h"
@@ -320,7 +321,11 @@ void define_options() {
     options::define("scaling", "Scaling", {"fit", "integer"}, {"Fit to screen", "Integer"});
     options::define("filter", "Filtering", {"nearest", "linear"}, {"Sharp (nearest)", "Smooth (linear)"});
     options::define("show_fps", "Show FPS", {"off", "on"}, {"Off", "On"});
-    options::define("threaded_3d", "Threaded 3D rendering", {"on", "off"}, {"On", "Off"});
+    options::define("renderer", "3D renderer (applies to the next game)", {"software", "gpu"},
+                    {"Software (CPU)", "GPU, deko3d (experimental)"});
+    options::define("gpu_3d_delay", "GPU renderer: 3D timing (applies to the next game)", {"on", "off"},
+                    {"One frame behind (faster)", "Same frame (accurate)"});
+    options::define("threaded_3d", "Threaded 3D rendering (software renderer)", {"on", "off"}, {"On", "Off"});
     options::define("audio_interpolation", "Audio interpolation",
                     {"none", "linear", "cosine", "cubic", "gaussian"},
                     {"None", "Linear", "Cosine", "Cubic", "SNES Gaussian"});
@@ -824,6 +829,14 @@ bool load_game(const std::string& rom_path) {
     else
         g_nds = std::unique_ptr<melonDS::NDS>(new (mem) melonDS::NDS(std::move(args), nullptr));
     fprintf(stderr, "[host] NDS created; resetting\n");
+    if (options::is("renderer", "gpu")) {
+        // SetRenderer falls back to the software renderer if the GPU one fails to start.
+        auto renderer = gpu::make_hybrid_renderer(*g_nds, options::is("gpu_3d_delay", "on"));
+        if (!renderer)
+            fprintf(stderr, "[host] GPU renderer unavailable; using the software renderer\n");
+        else
+            g_nds->SetRenderer(std::move(renderer));
+    }
     log_memory("after creating NDS");
     g_nds->Reset();
     fprintf(stderr, "[host] inserting cart\n");

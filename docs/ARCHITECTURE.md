@@ -25,10 +25,12 @@
 
 ## Data formats at the core boundary
 
-- **Video:** melonDS's software renderer gives two 256x192 framebuffers
+- **Video:** with option `renderer = gpu` (read at load), the 3D engine runs on the GPU
+  (`gpu/deko_renderer`, see `docs/GPU_RENDERER.md`); the 2D engines and the output below
+  are the same either way. melonDS's software renderer gives two 256x192 framebuffers
   (`GPU::GetFramebuffers`), 32-bit `0xAARRGGBB` (bytes B,G,R,A). `emu_host` converts both
   to RGBA8 into one 256x386 frame (top screen, two padding rows, bottom screen; see
-  `host::acquire_frame`). `ui::GameView` uploads it into one NanoVG image and lays the
+  `host::acquire_frame`). `ui::GameView` uploads it into one NanoVG image (through `gpu::FrameUploader`) and lays the
   screens out with upstream melonDS's `ScreenLayout` (`mds_upstream/src/frontend/`;
   options `screen_layout`, `screen_sizing` incl. "auto" from `host::auto_emphasis()`,
   `swap_screens`, `scaling`), drawing each screen through its 2x3 transform. It hands the
@@ -88,6 +90,8 @@ Headers under `switch/source/` are the contract. Summary:
 | `platform/http.h` | platform | HTTP(S) on curl: an ordered async queue on one worker thread (RetroAchievements), plus blocking `get` for bulk downloads |
 | `platform/keyboard.h` | platform | System software keyboard (text and password) |
 | `platform/system.h` | platform | Misc libnx services for the frontend (pin a thread to a CPU core, local time, CPU clock, memory usage) |
+| `gpu/deko_renderer.h` | gpu | `make_hybrid_renderer`: a `melonDS::Renderer` with the software 2D engines and a deko3d port of upstream's compute 3D renderer (own queue on borealis' device; 3D lines read back per frame). Installed by `emu_host` at load when option `renderer` is `gpu` (`gpu_3d_delay`, default on: show the 3D one frame late so emulation never waits for the GPU); falls back to software |
+| `gpu/frame_upload.h` | gpu | Update a NanoVG image with GPU copies queued on borealis' deko3d queue (no per-frame idle wait); falls back to `nvgUpdateImage` |
 | `frontend/emu_host.h` | frontend | Own the NDS instance, paths, saves/states, layout and the emulation thread; pause/resume, stats, composed frames |
 | `frontend/achievements.h` | frontend | RetroAchievements (rc_client): login, game load, per-frame processing, notifications, list, hardcore, state progress |
 | `frontend/rom_info.h` | frontend | Title, publisher and 32x32 icon from a ROM's header + banner (no full read), cached |
@@ -107,6 +111,9 @@ Headers under `switch/source/` are the contract. Summary:
 | `ui/game.h` | ui | `launch_game`: game activity + GameView (runs emulation) + in-game overlay |
 
 `frontend/` never includes `<switch.h>`; it only talks to `platform/` through these headers.
+`gpu/` is the deko3d layer: it may use deko3d and borealis' Switch video context (device,
+queue, NanoVG textures), and is where a deko3d melonDS renderer will live (plan:
+`docs/GPU_RENDERER.md`). Its headers expose no deko3d types.
 That keeps the host logic testable on a PC build later if we want one.
 
 `melonDS::Platform::` (declared in `mds_upstream/src/Platform.h`) is the core's half of the
